@@ -1,4 +1,8 @@
 import streamlit as st
+from pathlib import Path
+import subprocess
+import sys
+
 from db import init_db
 from router import route_intent
 from chains import faq_chain, product_chain
@@ -9,7 +13,18 @@ st.title("🛒 Amazon E-commerce ChatBot")
 st.caption("FAQ answers (ChromaDB) + Product search (SQLite). Product links open on Amazon.")
 st.success("App loaded ✅")
 
+# Initialize DB
 init_db()
+
+# ✅ Auto-ingest FAQs if ChromaDB folder is missing/empty (important for Streamlit Cloud)
+chroma_dir = Path("data/chroma_db")
+if (not chroma_dir.exists()) or (chroma_dir.exists() and not any(chroma_dir.iterdir())):
+    try:
+        st.info("Setting up FAQ knowledge base (first run)...")
+        subprocess.check_call([sys.executable, "ingest_faq.py"])
+        st.success("FAQ knowledge base ready ✅")
+    except Exception as e:
+        st.warning(f"FAQ setup skipped/failed: {e}")
 
 # chat history
 if "messages" not in st.session_state:
