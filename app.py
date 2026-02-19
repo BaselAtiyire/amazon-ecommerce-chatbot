@@ -16,9 +16,24 @@ st.success("App loaded ✅")
 # Initialize DB
 init_db()
 
-# ✅ Auto-ingest FAQs if ChromaDB folder is missing/empty (important for Streamlit Cloud)
+# --- FAQ Setup (Cloud-ready) ---
 chroma_dir = Path("data/chroma_db")
-if (not chroma_dir.exists()) or (chroma_dir.exists() and not any(chroma_dir.iterdir())):
+needs_ingest = (not chroma_dir.exists()) or (chroma_dir.exists() and not any(chroma_dir.iterdir()))
+
+col1, col2 = st.columns([3, 1])
+with col1:
+    st.info("FAQ knowledge base is built automatically on first run (Streamlit Cloud compatible).")
+with col2:
+    if st.button("Rebuild FAQ Index"):
+        try:
+            st.info("Rebuilding FAQ index...")
+            subprocess.check_call([sys.executable, "ingest_faq.py"])
+            st.success("FAQ index rebuilt ✅ Please refresh the page.")
+        except Exception as e:
+            st.error(f"FAQ rebuild failed: {e}")
+
+# Auto-ingest on first run if missing/empty
+if needs_ingest:
     try:
         st.info("Setting up FAQ knowledge base (first run)...")
         subprocess.check_call([sys.executable, "ingest_faq.py"])
@@ -26,7 +41,7 @@ if (not chroma_dir.exists()) or (chroma_dir.exists() and not any(chroma_dir.iter
     except Exception as e:
         st.warning(f"FAQ setup skipped/failed: {e}")
 
-# chat history
+# --- Chat history ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -38,6 +53,7 @@ query = st.chat_input("Ask me about products or policies...")
 
 
 def open_link_ui(label: str, url: str):
+    """Open external link. Uses link_button if available, else HTML anchor."""
     if not url:
         return
     if hasattr(st, "link_button"):
@@ -47,10 +63,12 @@ def open_link_ui(label: str, url: str):
 
 
 if query:
+    # user message
     st.session_state.messages.append({"role": "user", "content": query})
     with st.chat_message("user"):
         st.markdown(query, unsafe_allow_html=True)
 
+    # route
     intent = route_intent(query)
 
     with st.spinner(f"Routing → {intent.upper()} ..."):
