@@ -1,72 +1,71 @@
 # app.py
-import streamlit as st
-from pathlib import Path
-import subprocess
 import sys
+import subprocess
+from pathlib import Path
+
+import streamlit as st
 
 from database import init_db
 from router import route_intent
-from chains import faq_chain, product_chain
-
-# ✅ IMPORTANT:
-# Streamlit Cloud sometimes throws KeyError: 'db' when importing a module named db.py.
-# So we avoid naming any module "db.py".
-# We use "database.py" and import init_db from there.
-
-DATA_DIR = Path("data")
-CHROMA_DIR = DATA_DIR / "chroma_db"
-
+from chains import faq_chain, product_chain, ensure_faq_ready
 
 # ---------------------------
-# FAQ (Chroma) Setup Helpers
-# ---------------------------
-def chroma_is_empty(chroma_dir: Path) -> bool:
-    """Chroma is considered empty if folder missing OR has no files inside."""
-    return (not chroma_dir.exists()) or (chroma_dir.exists() and not any(chroma_dir.iterdir()))
-
-
-def run_ingest() -> None:
-    """Run ingest_faq.py using the same Python interpreter."""
-    subprocess.check_call([sys.executable, "ingest_faq.py"])
-
-
-# ---------------------------
-# UI Config
+# Config
 # ---------------------------
 st.set_page_config(page_title="Amazon Chatbot", page_icon="🛒", layout="centered")
 
 st.title("🛒 Amazon E-commerce ChatBot")
 st.caption("FAQ answers (ChromaDB) + Product search (SQLite). Product links open on Amazon.")
-st.success("App loaded ✅")
 
-# ✅ Initialize DB (SQLite) using database.py
+# ---------------------------
+# Init SQLite
+# ---------------------------
 init_db()
 
-# --- FAQ Setup (Cloud-ready) ---
-needs_ingest = chroma_is_empty(CHROMA_DIR)
+# ---------------------------
+# Ensure Chroma FAQ is ready (Cloud-safe)
+# ---------------------------
+INGEST_PATH = Path(__file__).with_name("ingest_faq.py")
+
+
+@st.cache_resource
+def init_kb() -> None:
+    """Build/load the FAQ vector index exactly once per server process."""
+    ensure_faq_ready()
+
 
 col1, col2 = st.columns([3, 1])
+
 with col1:
-    st.info("FAQ knowledge base is built automatically on first run (Streamlit Cloud compatible).")
+    st.info("FAQ knowledge base auto-builds on first run (Streamlit Cloud compatible).")
+
 with col2:
     if st.button("Rebuild FAQ Index"):
         try:
-            st.info("Rebuilding FAQ index...")
-            run_ingest()
-            st.success("FAQ index rebuilt ✅ Please refresh the page.")
+            st.info("Rebuilding FAQ index…")
+            subprocess.check_call([sys.executable, str(INGEST_PATH)])
+            # Clear cached resource so the next init re-opens fresh
+            init_kb.clear()
+            st.success("FAQ index rebuilt ✅ Refreshing…")
+            st.rerun()
         except Exception as e:
             st.error(f"FAQ rebuild failed: {e}")
 
-# Auto-ingest on first run if missing/empty
-if needs_ingest:
-    try:
-        st.info("Setting up FAQ knowledge base (first run)...")
-        run_ingest()
-        st.success("FAQ knowledge base ready ✅")
-    except Exception as e:
-        st.warning(f"FAQ setup skipped/failed: {e}")
+# Build/load KB; if it fails, show error and stop so chat doesn't break
+try:
+    with st.spinner("Initializing FAQ knowledge base…"):
+        init_kb()
+except Exception as e:
+    st.error(
+        "FAQ knowledge base failed to initialize on this server. "
+        "Open 'Manage app' → 'Logs' to see the full error."
+    )
+    st.exception(e)
+    st.stop()
 
-# --- Chat history ---
+# ---------------------------
+# Chat history
+# ---------------------------
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -74,10 +73,10 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"], unsafe_allow_html=True)
 
-query = st.chat_input("Ask me about products or policies...")
+query = st.chat_input("Ask me about products or policies…")
 
 
-def open_link_ui(label: str, url: str):
+def open_link_ui(label: str, url: str) -> None:
     """Open external link. Uses link_button if available, else HTML anchor."""
     if not url:
         return
@@ -88,15 +87,14 @@ def open_link_ui(label: str, url: str):
 
 
 if query:
-    # user message
+    # User message
     st.session_state.messages.append({"role": "user", "content": query})
     with st.chat_message("user"):
         st.markdown(query, unsafe_allow_html=True)
 
-    # route
     intent = route_intent(query)
 
-    with st.spinner(f"Routing → {intent.upper()} ..."):
+    with st.spinner(f"Routing → {intent.upper()} …"):
         try:
             if intent == "product":
                 products = product_chain(query)
@@ -120,7 +118,6 @@ if query:
                             )
                             open_link_ui("Open on Amazon", p.get("url", ""))
                             st.divider()
-
             else:
                 answer = faq_chain(query)
                 st.session_state.messages.append({"role": "assistant", "content": answer})

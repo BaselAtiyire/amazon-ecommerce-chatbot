@@ -1,61 +1,49 @@
-import csv
+# ingest_faq.py
 from pathlib import Path
-
 import chromadb
-from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+from chromadb.utils import embedding_functions
 
-DATA_CSV = Path("data/faq_data.csv")
-CHROMA_DIR = Path("data/chroma_db")
-COLLECTION_NAME = "flipkart_faq"
+DATA_DIR = Path("data")
+CHROMA_DIR = DATA_DIR / "chroma_db"
+COLLECTION_NAME = "amazon_faqs"
 
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(model_name=EMBEDDING_MODEL)
+
+FAQS = [
+    ("refund_policy",
+     "Most items can be returned within the return window shown on your order. "
+     "Refunds are typically issued after the return is received and processed. "
+     "During holidays, return windows may be extended for eligible purchases."),
+    ("return_process",
+     "To return an item: go to Your Orders → choose the item → select Return or Replace Items → "
+     "choose reason → select return method → print label or use a QR code drop-off if available."),
+    ("shipping",
+     "Shipping speed depends on your selected option (Standard, Expedited, Prime) and item availability. "
+     "The estimated delivery date is shown at checkout and in Your Orders."),
+    ("cancellations",
+     "You can cancel an order from Your Orders if it hasn't entered the shipping process. "
+     "If it shipped already, you may need to return it after delivery."),
+]
 
 def main():
-    if not DATA_CSV.exists():
-        raise FileNotFoundError(f"Missing FAQ CSV at: {DATA_CSV}")
-
     CHROMA_DIR.mkdir(parents=True, exist_ok=True)
-
     client = chromadb.PersistentClient(path=str(CHROMA_DIR))
-    embed_fn = SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
 
-    # Recreate/overwrite collection each time to avoid duplicates
+    # Rebuild cleanly (optional but prevents stale mismatch)
     try:
         client.delete_collection(COLLECTION_NAME)
     except Exception:
         pass
 
-    collection = client.get_or_create_collection(
-        name=COLLECTION_NAME,
-        embedding_function=embed_fn,
-    )
+    col = client.get_or_create_collection(name=COLLECTION_NAME, embedding_function=embedding_fn)
 
-    questions = []
-    ids = []
-    metadatas = []
+    ids = [i for i, _ in FAQS]
+    docs = [text for _, text in FAQS]
+    metadatas = [{"source": "faq_seed"} for _ in FAQS]
 
-    with open(DATA_CSV, "r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for i, row in enumerate(reader):
-            q = (row.get("question") or "").strip()
-            a = (row.get("answer") or "").strip()
-            if not q or not a:
-                continue
-
-            questions.append(q)
-            ids.append(f"faq-{i}")
-            metadatas.append({"question": q, "answer": a})
-
-    if not questions:
-        raise ValueError("No valid FAQ rows found in faq_data.csv (need question,answer).")
-
-    collection.add(
-        documents=questions,
-        ids=ids,
-        metadatas=metadatas,
-    )
-
-    print(f"✅ Ingested {len(questions)} FAQs into ChromaDB at {CHROMA_DIR}")
-
+    col.add(ids=ids, documents=docs, metadatas=metadatas)
+    print("✅ FAQ collection built:", COLLECTION_NAME)
 
 if __name__ == "__main__":
     main()

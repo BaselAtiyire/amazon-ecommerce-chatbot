@@ -1,3 +1,4 @@
+# database.py
 import sqlite3
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -6,7 +7,6 @@ DB_PATH = Path("data/products.db")
 
 
 def init_db() -> None:
-    """Create the SQLite DB + products table. Seed sample products if empty."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     conn = sqlite3.connect(DB_PATH)
@@ -25,19 +25,16 @@ def init_db() -> None:
         """
     )
 
-    # Seed sample data only if table is empty
     cur.execute("SELECT COUNT(*) FROM products")
     count = cur.fetchone()[0]
 
     if count == 0:
-        # ✅ Amazon-only links + realistic USD prices
         sample = [
             ("NIKE", "Pegasus 40 Running Shoes (Women)", 129.99, 5.0, "https://www.amazon.com/s?k=nike+pegasus+40"),
             ("NIKE", "Winflo 9 Premium Running Shoes (Women)", 109.99, 5.0, "https://www.amazon.com/s?k=nike+winflo+9"),
             ("ADIDAS", "Ultraboost Light", 189.99, 4.7, "https://www.amazon.com/s?k=adidas+ultraboost+light"),
             ("PUMA", "Deviate Nitro 2", 159.99, 4.6, "https://www.amazon.com/s?k=puma+deviate+nitro+2"),
         ]
-
         cur.executemany(
             "INSERT INTO products (brand, name, price, rating, url) VALUES (?, ?, ?, ?, ?)",
             sample,
@@ -54,7 +51,6 @@ def query_products(
     max_price: Optional[float] = None,
     limit: int = 5,
 ) -> List[Dict[str, Any]]:
-    """Query products by optional brand, min_rating, min_price, max_price."""
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
 
@@ -84,7 +80,4 @@ def query_products(
     rows = cur.fetchall()
     conn.close()
 
-    return [
-        {"brand": r[0], "name": r[1], "price": r[2], "rating": r[3], "url": r[4]}
-        for r in rows
-    ]
+    return [{"brand": r[0], "name": r[1], "price": r[2], "rating": r[3], "url": r[4]} for r in rows]

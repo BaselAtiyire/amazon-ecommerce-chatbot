@@ -1,107 +1,112 @@
+# chains.py
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
 from pathlib import Path
-from typing import Optional, List, Dict, Any
-import re
+from typing import Any, Optional
 
 import chromadb
-from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+from chromadb.utils import embedding_functions
 
-from db import query_products
+from database import query_products
 
-CHROMA_DIR = Path("data/chroma_db")
-COLLECTION_NAME = "flipkart_faq"
+# -----------------------------
+# Storage paths (cloud-safe)
+# -----------------------------
+# On Streamlit Cloud, /tmp is writable and reliable for ephemeral storage.
+# Locally, you can keep using ./data/chroma_db
+DEFAULT_CHROMA_PATH = Path("data") / "chroma_db"
+CHROMA_DIR = Path(os.getenv("CHROMA_DIR", str(DEFAULT_CHROMA_PATH)))
 
-# ---- Cache Chroma client + collection ----
-_client = None
-_collection = None
-_embed_fn = None
+COLLECTION_NAME = "amazon_faqs"
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+
+_embedding_fn = None
 
 
-def _get_faq_collection():
-    global _client, _collection, _embed_fn
-
-    if _client is None:
-        _client = chromadb.PersistentClient(path=str(CHROMA_DIR))
-        _embed_fn = SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
-        _collection = _client.get_or_create_collection(
-            name=COLLECTION_NAME,
-            embedding_function=_embed_fn,
+def get_embedding_fn():
+    global _embedding_fn
+    if _embedding_fn is None:
+        _embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
+            model_name=EMBEDDING_MODEL
         )
-
-    return _collection
-
-
-def faq_chain(question: str) -> str:
-    """Retrieve the best FAQ answer from ChromaDB."""
-    collection = _get_faq_collection()
-
-    res = collection.query(query_texts=[question], n_results=1)
-
-    metadatas = res.get("metadatas") or []
-    if not metadatas or not metadatas[0]:
-        return "Sorry, I couldn't find an answer in the FAQs."
-
-    top_meta = metadatas[0][0]
-    return top_meta.get("answer", "Sorry, no answer found.")
+    return _embedding_fn
 
 
-def product_chain(text: str) -> List[Dict[str, Any]]:
-    """Parse natural-language filters and query products from SQLite."""
-    t = text.lower()
+def _client() -> chromadb.PersistentClient:
+    # If Streamlit Cloud blocks writing to repo dir, fallback to /tmp
+    try:
+        CHROMA_DIR.mkdir(parents=True, exist_ok=True)
+        return chromadb.PersistentClient(path=str(CHROMA_DIR))
+    except Exception:
+        tmp_dir = Path("/tmp") / "chroma_db"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        return chromadb.PersistentClient(path=str(tmp_dir))
 
-    # Brand
-    brand: Optional[str] = None
-    if "nike" in t:
-        brand = "NIKE"
-    elif "adidas" in t:
-        brand = "ADIDAS"
-    elif "puma" in t:
-        brand = "PUMA"
 
-    # Rating (phrases + explicit numbers)
-    min_rating: Optional[float] = None
-    if "excellent" in t:
-        min_rating = 4.8
-    elif "very good" in t:
-        min_rating = 4.5
-    elif "good" in t:
-        min_rating = 4.2
-
-    # explicit: "rating 4.6" or "rating: 4.6"
-    m_rating = re.search(r"\brating\b\s*[:=]?\s*(\d(?:\.\d)?)", t)
-    if m_rating:
-        min_rating = float(m_rating.group(1))
-    else:
-        # "above 4.6", "over 4.6", "at least 4.6", ">= 4.6"
-        m_rating2 = re.search(r"(?:above|over|at least|>=)\s*(\d(?:\.\d)?)", t)
-        if m_rating2:
-            min_rating = float(m_rating2.group(1))
-
-    # Limit: "top 3", "top three", etc.
-    limit = 5
-    m_top = re.search(r"\btop\s+(\d+)\b", t)
-    if m_top:
-        limit = max(1, min(20, int(m_top.group(1))))
-    elif "top three" in t:
-        limit = 3
-    elif "top two" in t:
-        limit = 2
-
-    # Price: under/below/less than
-    max_price: Optional[float] = None
-    m_under = re.search(r"(?:under|below|less than)\s*\$?\s*(\d+(?:\.\d+)?)", t)
-    if m_under:
-        max_price = float(m_under.group(1))
-
-    # Price: over/above/more than/greater than
-    min_price: Optional[float] = None
-    m_over = re.search(r"(?:over|above|more than|greater than)\s*\$?\s*(\d+(?:\.\d+)?)", t)
-    if m_over:
-        min_price = float(m_over.group(1))
-
-    return query_products(
-        brand=brand,
-        min_rating=min_rating,
-        min_price=min_price,
-        max_price=max_price,
-        limit=limit,
+def _collection(client: chromadb.PersistentClient):
+    return client.get_or_create_collection(
+        name=COLLECTION_NAME,
+        embedding_function=get_embedding_fn(),
     )
+
+
+def ensure_faq_ready() -> None:
+    """
+    Guarantees the FAQ collection exists AND has data.
+    If missing/empty, runs ingest_faq.py.
+    """
+    client = _client()
+    col = _collection(client)
+
+    # If empty on cloud (fresh start), ingest again
+    try:
+        count = col.count()
+    except Exception:
+        count = 0
+
+    if count == 0:
+        ingest_path = Path(__file__).with_name("ingest_faq.py")
+        subprocess.check_call([sys.executable, str(ingest_path)])
+
+        # Re-open and validate
+        col = _collection(client)
+        if col.count() == 0:
+            raise RuntimeError(
+                "FAQ collection is still empty after ingest. "
+                "Check ingest_faq.py and that your FAQ source file is included in the repo."
+            )
+
+
+def faq_chain(query: str) -> str:
+    client = _client()
+    col = _collection(client)
+
+    res = col.query(query_texts=[query], n_results=3)
+    docs = (res.get("documents") or [[]])[0]
+
+    if not docs:
+        return "I couldn’t find that in the FAQ knowledge base yet. Try asking in a different way."
+
+    best = docs[0]
+    extras = docs[1:]
+
+    out = f"**Answer (from FAQ):**\n\n{best}"
+    if extras:
+        out += "\n\n**Related info:**\n" + "\n".join([f"- {d}" for d in extras])
+    return out
+
+
+def product_chain(query: str) -> Any:
+    brand: Optional[str] = None
+    for b in ["NIKE", "ADIDAS", "PUMA"]:
+        if b.lower() in query.lower():
+            brand = b
+            break
+
+    products = query_products(brand=brand, limit=5)
+    if not products:
+        return "No products found. Try another keyword like NIKE / ADIDAS / PUMA."
+    return products
