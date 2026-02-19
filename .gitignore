@@ -1,11 +1,7 @@
 .venv/
+.venv/
 __pycache__/
-*.pyc
-.DS_Store
-
-data/products.db
 data/chroma_db/
-data/*.sqlite3
-
-.env
-.streamlit/secrets.toml
+data/products.db
+*.db
+*.pyc
