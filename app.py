@@ -1,24 +1,49 @@
+# app.py
 import streamlit as st
 from pathlib import Path
 import subprocess
 import sys
 
-from db import init_db
+from database import init_db
 from router import route_intent
 from chains import faq_chain, product_chain
 
+# ✅ IMPORTANT:
+# Streamlit Cloud sometimes throws KeyError: 'db' when importing a module named db.py.
+# So we avoid naming any module "db.py".
+# We use "database.py" and import init_db from there.
+
+DATA_DIR = Path("data")
+CHROMA_DIR = DATA_DIR / "chroma_db"
+
+
+# ---------------------------
+# FAQ (Chroma) Setup Helpers
+# ---------------------------
+def chroma_is_empty(chroma_dir: Path) -> bool:
+    """Chroma is considered empty if folder missing OR has no files inside."""
+    return (not chroma_dir.exists()) or (chroma_dir.exists() and not any(chroma_dir.iterdir()))
+
+
+def run_ingest() -> None:
+    """Run ingest_faq.py using the same Python interpreter."""
+    subprocess.check_call([sys.executable, "ingest_faq.py"])
+
+
+# ---------------------------
+# UI Config
+# ---------------------------
 st.set_page_config(page_title="Amazon Chatbot", page_icon="🛒", layout="centered")
 
 st.title("🛒 Amazon E-commerce ChatBot")
 st.caption("FAQ answers (ChromaDB) + Product search (SQLite). Product links open on Amazon.")
 st.success("App loaded ✅")
 
-# Initialize DB
+# ✅ Initialize DB (SQLite) using database.py
 init_db()
 
 # --- FAQ Setup (Cloud-ready) ---
-chroma_dir = Path("data/chroma_db")
-needs_ingest = (not chroma_dir.exists()) or (chroma_dir.exists() and not any(chroma_dir.iterdir()))
+needs_ingest = chroma_is_empty(CHROMA_DIR)
 
 col1, col2 = st.columns([3, 1])
 with col1:
@@ -27,7 +52,7 @@ with col2:
     if st.button("Rebuild FAQ Index"):
         try:
             st.info("Rebuilding FAQ index...")
-            subprocess.check_call([sys.executable, "ingest_faq.py"])
+            run_ingest()
             st.success("FAQ index rebuilt ✅ Please refresh the page.")
         except Exception as e:
             st.error(f"FAQ rebuild failed: {e}")
@@ -36,7 +61,7 @@ with col2:
 if needs_ingest:
     try:
         st.info("Setting up FAQ knowledge base (first run)...")
-        subprocess.check_call([sys.executable, "ingest_faq.py"])
+        run_ingest()
         st.success("FAQ knowledge base ready ✅")
     except Exception as e:
         st.warning(f"FAQ setup skipped/failed: {e}")
