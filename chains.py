@@ -40,7 +40,6 @@ def faq_chain(question: str) -> str:
     if not metadatas or not metadatas[0]:
         return "Sorry, I couldn't find an answer in the FAQs."
 
-    # ✅ Correct: metadatas[0] is a list of dicts
     top_meta = metadatas[0][0]
     return top_meta.get("answer", "Sorry, no answer found.")
 
