@@ -45,8 +45,6 @@ The app combines **Retrieval-Augmented Generation (RAG)** with a **vector databa
 ---
 
 ## ⚙️ Local Setup
-
-### 1️⃣ Clone the repo
 ```bash
 git clone https://github.com/<your-username>/amazon-ecommerce-chatbot.git
 cd amazon-ecommerce-chatbot
