@@ -1,4 +1,7 @@
 # app.py
+import os
+os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python"
+
 import sys
 import subprocess
 from pathlib import Path
@@ -27,7 +30,6 @@ init_db()
 # ---------------------------
 INGEST_PATH = Path(__file__).with_name("ingest_faq.py")
 
-
 @st.cache_resource
 def init_kb() -> None:
     """Build/load the FAQ vector index exactly once per server process."""
@@ -44,7 +46,6 @@ with col2:
         try:
             st.info("Rebuilding FAQ index…")
             subprocess.check_call([sys.executable, str(INGEST_PATH)])
-            # Clear cached resource so the next init re-opens fresh
             init_kb.clear()
             st.success("FAQ index rebuilt ✅ Refreshing…")
             st.rerun()
